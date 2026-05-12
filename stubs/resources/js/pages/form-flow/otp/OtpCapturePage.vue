@@ -23,6 +23,10 @@ const form = useForm({
     otp_code: '',
 });
 
+const otpCode = ref('');
+const processing = ref(false);
+const errors = ref<Record<string, string>>({});
+
 const cooldown = ref(0);
 const cooldownTimer = ref<ReturnType<typeof setTimeout> | null>(null);
 const cooldownInterval = ref<ReturnType<typeof setInterval> | null>(null);
@@ -33,13 +37,46 @@ const resendCount = ref(0);
 const MAX_RESENDS = computed(() => props.config.max_resends);
 const COOLDOWN_SECONDS = computed(() => props.config.resend_cooldown);
 
+const normalizedOtp = computed(() => {
+  return String(otpCode.value ?? '').replace(/\D/g, '').slice(0, props.config.digits);
+});
+
+const canSubmit = computed(() => {
+  return !processing.value && normalizedOtp.value.length === props.config.digits;
+});
+
+function updateOtp(value: string | number) {
+  otpCode.value = String(value ?? '').replace(/\D/g, '').slice(0, props.config.digits);
+}
+
 function submit() {
-    form.post(`/form-flow/${props.flow_id}/step/${props.step}`, {
+  if (!canSubmit.value) return;
+
+  processing.value = true;
+  errors.value = {};
+
+  router.post(
+      `/form-flow/${props.flow_id}/step/${props.step}`,
+      {
         data: {
-            otp_code: form.otp_code,
+          otp_code: normalizedOtp.value,
         },
+      },
+      {
         preserveScroll: true,
-    });
+        onError: (pageErrors) => {
+          console.error('[OtpCapturePage] submit errors', pageErrors);
+          errors.value = pageErrors;
+        },
+        onSuccess: () => {
+          console.log('[OtpCapturePage] submit success');
+        },
+        onFinish: () => {
+          processing.value = false;
+          console.log('[OtpCapturePage] submit finished');
+        },
+      },
+  );
 }
 
 function resendOtp() {
@@ -147,14 +184,15 @@ onMounted(() => {
                         <Label for="otp">One-Time Password</Label>
                         <Input
                             id="otp"
-                            ref="otpInputRef"
-                            v-model="form.otp_code"
+                            :model-value="otpCode"
                             type="text"
                             :maxlength="config.digits"
                             inputmode="numeric"
                             pattern="[0-9]*"
+                            autocomplete="one-time-code"
                             placeholder="Enter OTP"
                             required
+                            @update:model-value="updateOtp"
                         />
 
                         <div class="flex items-center justify-between text-sm min-h-[1.25rem]">
@@ -198,12 +236,15 @@ onMounted(() => {
                     <!-- Submit Button -->
                     <div class="flex justify-end">
                         <Button
-                            type="submit"
-                            :disabled="form.processing || form.otp_code.length !== config.digits"
                             class="w-full"
+                            :disabled="!canSubmit"
+                            @click="submit"
                         >
-                            {{ form.processing ? 'Verifying…' : 'Verify OTP' }}
+                          {{ processing ? 'Verifying…' : 'Verify OTP' }}
                         </Button>
+                        <p v-if="errors.otp_code || errors['data.otp_code']" class="text-sm text-destructive">
+                          {{ errors.otp_code || errors['data.otp_code'] }}
+                        </p>
                     </div>
                 </form>
             </div>
