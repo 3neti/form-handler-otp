@@ -11,6 +11,7 @@ use Inertia\Response;
 use LBHurtado\FormFlowManager\Contracts\FormHandlerInterface;
 use LBHurtado\FormFlowManager\Data\FormFlowStepData;
 use LBHurtado\FormHandlerOtp\OtpHandler;
+use LBHurtado\FormHandlerOtp\Services\TxtcmdrClient;
 
 beforeEach(function (): void {
     config()->set('otp-handler.txtcmdr.base_url', 'https://txtcmdr.example.test');
@@ -233,4 +234,20 @@ it('publishes the supported configuration schema', function (): void {
     expect((new OtpHandler)->getConfigSchema())
         ->toHaveKeys(['max_resends', 'resend_cooldown', 'digits', 'ui_variant'])
         ->and((new OtpHandler)->validate([], []))->toBeTrue();
+});
+
+it('fails safely when Txtcmdr credentials are absent', function (): void {
+    config()->set('otp-handler.txtcmdr.api_token');
+
+    expect(fn () => new TxtcmdrClient)
+        ->toThrow(InvalidArgumentException::class, 'Txtcmdr API token is not configured.');
+});
+
+it('rejects malformed provider responses', function (): void {
+    Http::fake([
+        'https://txtcmdr.example.test/api/otp/request' => Http::response(['status' => 'accepted']),
+    ]);
+
+    expect(fn () => (new TxtcmdrClient)->requestOtp('639171234567', 'flow-123'))
+        ->toThrow(UnexpectedValueException::class, 'invalid OTP request response');
 });

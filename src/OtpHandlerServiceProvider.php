@@ -6,10 +6,11 @@ namespace LBHurtado\FormHandlerOtp;
 
 use Illuminate\Support\ServiceProvider;
 use LBHurtado\FormHandlerOtp\Console\InstallOtpHandlerCommand;
+use LBHurtado\FormHandlerOtp\Console\TestOtpCommand;
 
 /**
  * OTP Handler Service Provider
- * 
+ *
  * Registers the OTP handler with the form flow system.
  */
 class OtpHandlerServiceProvider extends ServiceProvider
@@ -24,13 +25,13 @@ class OtpHandlerServiceProvider extends ServiceProvider
             __DIR__.'/../config/otp-handler.php',
             'otp-handler'
         );
-        
+
         // Register OtpHandler as singleton
         $this->app->singleton(OtpHandler::class, function ($app) {
-            return new OtpHandler();
+            return new OtpHandler;
         });
     }
-    
+
     /**
      * Bootstrap services
      */
@@ -39,30 +40,35 @@ class OtpHandlerServiceProvider extends ServiceProvider
         // Register console commands
         if ($this->app->runningInConsole()) {
             $this->commands([
-                \LBHurtado\FormHandlerOtp\Console\TestOtpCommand::class,
                 InstallOtpHandlerCommand::class,
             ]);
+
+            if ($this->app->environment(['local', 'testing'])) {
+                $this->commands([
+                    TestOtpCommand::class,
+                ]);
+            }
         }
-        
-        // Register test routes (only in local/testing)
-        if (!$this->app->isProduction()) {
+
+        // Register test routes only in local and automated test environments.
+        if ($this->app->environment(['local', 'testing'])) {
             $this->loadRoutesFrom(__DIR__.'/../routes/test.php');
         }
-        
+
         // Publish configuration
         $this->publishes([
             __DIR__.'/../config/otp-handler.php' => config_path('otp-handler.php'),
         ], 'otp-handler-config');
-        
+
         // Publish frontend assets (Vue components)
         $this->publishes([
             __DIR__.'/../stubs/resources/js/pages/form-flow/otp' => resource_path('js/pages/form-flow/otp'),
         ], 'otp-handler-stubs');
-        
+
         // Auto-register handler with form-flow-manager
         $this->registerHandler();
     }
-    
+
     /**
      * Register the OTP handler with form-flow-manager
      */
@@ -70,10 +76,10 @@ class OtpHandlerServiceProvider extends ServiceProvider
     {
         // Get current handlers from config
         $handlers = config('form-flow.handlers', []);
-        
+
         // Add otp handler
         $handlers['otp'] = OtpHandler::class;
-        
+
         // Update config
         config(['form-flow.handlers' => $handlers]);
     }

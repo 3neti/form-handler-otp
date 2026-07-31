@@ -8,7 +8,7 @@ use Spatie\LaravelData\Data;
 
 /**
  * OTP Data
- * 
+ *
  * Represents validated OTP data from form submission.
  */
 class OtpData extends Data

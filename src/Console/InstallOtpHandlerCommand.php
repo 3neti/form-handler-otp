@@ -8,7 +8,7 @@ use Illuminate\Console\Command;
 
 /**
  * Install OTP Handler Command
- * 
+ *
  * Installs required UI dependencies and publishes assets.
  */
 class InstallOtpHandlerCommand extends Command
@@ -29,24 +29,24 @@ class InstallOtpHandlerCommand extends Command
     public function handle(): int
     {
         $this->info('Installing OTP Handler...');
-        
+
         // Publish Vue components
         $this->publishAssets();
-        
+
         $this->newLine();
         $this->info('✓ OTP Handler installed successfully!');
         $this->line('  Run "npm run build" to compile frontend assets.');
-        
+
         return self::SUCCESS;
     }
-    
+
     /**
      * Publish package assets
      */
     protected function publishAssets(): void
     {
         $this->line('  • Publishing Vue components...');
-        
+
         $this->call('vendor:publish', [
             '--tag' => 'otp-handler-stubs',
             '--force' => $this->option('force'),

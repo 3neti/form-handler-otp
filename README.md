@@ -1,286 +1,119 @@
-# OTP Handler Plugin
+# OTP Handler
 
-A Form Flow Manager plugin for OTP (One-Time Password) verification using time-based tokens (TOTP).
+`3neti/form-handler-otp` adds mobile one-time-password verification to
+`3neti/form-flow`. It delegates OTP generation, delivery, expiry, attempt
+tracking, and verification to a configured Txtcmdr service.
 
-## Features
+## Requirements
 
-✅ Time-based OTP generation (TOTP RFC 6238)  
-✅ Configurable OTP period, digits, and resend limits  
-✅ SMS delivery via callback (provider-agnostic)  
-✅ Resend functionality with cooldown timer  
-✅ Automatic cache management  
-✅ Auto-registration with Form Flow Manager  
-✅ Mobile-optimized Vue component
+- PHP 8.2 or newer
+- Laravel 12 or 13
+- Form Flow 1.8 or newer
+- Inertia Laravel 2 or 3 in applications that render the published Vue page
 
 ## Installation
 
 ```bash
 composer require 3neti/form-handler-otp
+php artisan otp-handler:install --no-interaction
 ```
 
-That's it! The handler automatically registers itself with the Form Flow Manager.
+The package service provider registers the `otp` handler automatically. The
+install command publishes the package configuration and Vue page.
 
 ## Configuration
 
-Publish the config file:
+Publish the configuration independently when needed:
 
 ```bash
 php artisan vendor:publish --tag=otp-handler-config
 ```
 
-Publish the Vue component:
+Configure the Txtcmdr endpoint and bearer token in the host environment:
 
-```bash
-php artisan vendor:publish --tag=otp-handler-stubs
+```dotenv
+TXTCMDR_API_URL=https://txtcmdr.example
+TXTCMDR_API_TOKEN=
+TXTCMDR_TIMEOUT=30
+
+OTP_MAX_RESENDS=3
+OTP_RESEND_COOLDOWN=30
 ```
 
-Edit `config/otp-handler.php`:
+Do not commit the API token. The handler sends it only as the bearer token for
+Txtcmdr requests.
 
-```php
-return [
-    'label' => env('OTP_LABEL', config('app.name')),
-    'period' => env('OTP_PERIOD', 600),  // 10 minutes
-    'digits' => env('OTP_DIGITS', 4),
-    'cache_prefix' => 'otp',
-    'max_resends' => env('OTP_MAX_RESENDS', 3),
-    'resend_cooldown' => env('OTP_RESEND_COOLDOWN', 30),  // 30 seconds
-    'send_sms_callback' => null,  // Configure in service provider
-];
-```
+## Form Flow contract
 
-### Environment Variables
-
-Add to `.env`:
-
-```bash
-OTP_LABEL="Your App"
-OTP_PERIOD=600         # 10 minutes
-OTP_DIGITS=4           # 4-digit OTP
-OTP_MAX_RESENDS=3      # Max 3 resend attempts
-OTP_RESEND_COOLDOWN=30 # 30 seconds cooldown
-```
-
-### SMS Integration
-
-The plugin includes built-in SMS support via `lbhurtado/sms` with EngageSpark. No additional configuration needed if your app already uses EngageSpark.
-
-**Environment Variables:**
-
-```bash
-ENGAGESPARK_API_KEY=your_api_key
-ENGAGESPARK_ORG_ID=your_org_id
-ENGAGESPARK_SENDER_ID=cashless
-```
-
-The plugin automatically uses these credentials from your existing SMS configuration.
-
-## Usage
-
-### In a Form Flow
-
-```javascript
-const response = await fetch('/form-flow/start', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-        reference_id: 'unique-id',
-        steps: [
-            {
-                handler: 'otp',
-                config: {
-                    title: 'Verify Your Identity',
-                    description: 'Enter the OTP sent to your mobile',
-                    max_resends: 3,
-                    resend_cooldown: 30,
-                    digits: 4
-                }
-            }
-        ],
-        callbacks: {
-            on_complete: 'https://your-app.test/callback'
-        }
-    })
-});
-```
-
-### Configuration Options
-
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `max_resends` | integer | `3` | Maximum OTP resend attempts |
-| `resend_cooldown` | integer | `30` | Cooldown between resends (seconds) |
-| `digits` | integer | `4` | Number of digits in OTP (4, 5, or 6) |
-
-### Context Requirements
-
-The OTP handler requires `mobile` to be present in the context:
-
-```php
-// In your form flow
-$context = [
-    'flow_id' => $flowId,
-    'mobile' => '09171234567',  // Required for OTP delivery
-];
-```
-
-## Collected Data
-
-The handler returns the following data structure:
+Add an `otp` step after a step that collects `mobile`:
 
 ```php
 [
-    'mobile' => '09171234567',
-    'otp_code' => '1234',
-    'verified_at' => '2024-12-15T08:00:00+08:00',
-    'reference_id' => 'flow-abc123',
+    'handler' => 'otp',
+    'config' => [
+        'max_resends' => 3,
+        'resend_cooldown' => 30,
+        'digits' => 6,
+        'ui_variant' => 'compact',
+    ],
 ]
 ```
+
+The handler reads the mobile number from the current Form Flow session. It
+fails before contacting Txtcmdr if no mobile number has been collected.
+
+On the first render, the handler:
+
+1. requests an OTP from `POST /api/otp/request`;
+2. stores only the returned verification identifier in the session;
+3. renders the OTP capture page.
+
+On submission, it verifies the code through `POST /api/otp/verify`. A successful
+verification clears the verification and delivery-control session state, then
+returns:
+
+```php
+[
+    'mobile' => '639171234567',
+    'otp_code' => '123456',
+    'verified_at' => '2026-07-31T15:00:00+08:00',
+    'reference_id' => 'flow-123',
+]
+```
+
+The returned code is Form Flow result data. Hosts should apply their own data
+retention and redaction policy before persisting or logging collected results.
+
+## User interface
+
+The published Vue page supports Form Flow's `default`, `compact`, and
+`immersive` UI variants. It uses the shared Form Flow screen and action
+components, accepts numeric input, submits the nested `data.otp_code` payload,
+and focuses the code input on entry.
+
+## Delivery safeguards
+
+- Verification identifiers are isolated by Form Flow reference in the session.
+- Successful codes are one-time because Txtcmdr is the verification authority
+  and local session state is cleared after acceptance.
+- Resend count and cooldown are enforced by the server handler, not only by
+  the browser.
+- Provider rejection reasons are mapped to sanitized validation messages.
+- A missing verification session or mobile number fails closed.
+- Hosts should still rate-limit Form Flow endpoints by authenticated principal,
+  session, mobile reference, and source address.
 
 ## Testing
 
 ```bash
-cd packages/form-handler-otp
 composer test
+composer pint -- --test
+composer audit
 ```
 
-### Test Coverage
-
-- ✅ Interface implementation
-- ✅ OTP generation (4, 5, 6 digits)
-- ✅ OTP validation (correct/incorrect)
-- ✅ Cache management
-- ✅ Expiry handling
-- ✅ Config schema
-- ✅ Handler name
-
-## How It Works
-
-### 1. Plugin Auto-Registration
-
-```php
-// OtpHandlerServiceProvider::boot()
-protected function registerHandler(): void
-{
-    $handlers = config('form-flow.handlers', []);
-    $handlers['otp'] = OtpHandler::class;
-    config(['form-flow.handlers' => $handlers]);
-}
-```
-
-### 2. OTP Generation
-
-Uses `spomky-labs/otphp` library for TOTP (Time-based One-Time Password):
-
-```php
-$totp = TOTP::createFromSecret($secret);
-$totp->setPeriod(600);  // 10 minutes
-$totp->setDigits(4);    // 4-digit code
-$code = $totp->now();   // Generate current OTP
-```
-
-### 3. SMS Delivery
-
-OTP is sent via configurable callback:
-
-```php
-$callback = config('otp-handler.send_sms_callback');
-$callback($mobile, $otpCode, $appName);
-```
-
-### 4. Validation
-
-```php
-$totp = TOTP::createFromSecret($cachedSecret);
-$isValid = $totp->verify($submittedCode, null, $window);  // ±1 time window
-```
-
-### 5. Resend Logic
-
-Frontend handles resend with:
-- Cooldown timer (default 30 seconds)
-- Max attempts limit (default 3)
-- Success/error messaging
-
-## Architecture
-
-This is a **plugin package** for Form Flow Manager:
-
-```
-form-handler-otp/          (Plugin)
-├── Implements FormHandlerInterface
-├── Self-registers via service provider
-└── Optional dependency
-
-form-flow-manager/         (Core)
-├── Discovers plugins automatically
-└── Orchestrates flow with registered handlers
-
-redeem-x/                  (Host App)
-└── Installs: core + chosen plugins
-```
-
-### Plugin Benefits
-
-✅ **Optional** - Install only if needed  
-✅ **Independent** - Tested separately  
-✅ **Reusable** - Works across different apps  
-✅ **Maintainable** - Clean separation of concerns  
-✅ **Provider-agnostic** - No hardcoded SMS dependencies
-
-## Security Considerations
-
-- **Rate Limiting**: Max 3 resends per session
-- **Timing Attack Prevention**: Constant-time comparison via TOTP library
-- **Clock Skew**: ±1 time window for validation
-- **Cache Isolation**: Unique prefix to avoid collisions
-- **Auto-cleanup**: Cache TTL matches OTP period
-- **One-time use**: Cache cleared after successful validation
-
-## Requirements
-
-- PHP 8.2+
-- Laravel 12+
-- Form Flow Manager (`lbhurtado/form-flow-manager`)
-- Spomky Labs OTPHP (`spomky-labs/otphp`)
-
-## Troubleshooting
-
-### "Handler not found: otp"
-
-**Solution:**
-```bash
-php artisan config:clear
-php artisan cache:clear
-composer dump-autoload
-```
-
-### OTP not sent
-
-**Check:**
-1. SMS callback configured?
-2. Mobile number valid?
-3. SMS provider credentials correct?
-4. Check logs for callback errors
-
-### OTP validation fails
-
-**Check:**
-1. OTP not expired? (default: 10 minutes)
-2. Correct digits configured?
-3. Cache working properly?
-4. Clock sync between server and client?
-
-## Related Packages
-
-- [form-flow-manager](../form-flow-manager) - Core orchestration
-- [form-handler-location](../form-handler-location) - GPS capture
-- [form-handler-selfie](../form-handler-selfie) - Camera capture (planned)
-- [form-handler-signature](../form-handler-signature) - Digital signature (planned)
+The package suite fakes HTTP and verifies the request, session, resend,
+provider-rejection, expiry, and UI render contracts without sending SMS.
 
 ## License
 
 MIT
-
-## Author
-
-3neti
