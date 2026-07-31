@@ -120,7 +120,8 @@ it('verifies the submitted code and clears the verification session', function (
         'reference_id' => 'flow-123',
     ])
         ->and($result['verified_at'])->toBeString()
-        ->and(Session::has('otp_verification.flow-123'))->toBeFalse();
+        ->and(Session::has('otp_verification.flow-123'))->toBeFalse()
+        ->and(Session::has('otp_delivery.flow-123'))->toBeFalse();
 
     Http::assertSent(function (HttpRequest $request): bool {
         return $request->url() === 'https://txtcmdr.example.test/api/otp/verify'
@@ -165,6 +166,10 @@ it('fails closed when the verification session has expired', function (): void {
 
 it('requests and stores a replacement verification on resend', function (): void {
     Session::put('otp_verification.flow-123', 'verification-old');
+    Session::put('otp_delivery.flow-123', [
+        'resends' => 0,
+        'sent_at' => now()->subSeconds(31)->timestamp,
+    ]);
     Http::fake([
         'https://txtcmdr.example.test/api/otp/request' => Http::response([
             'verification_id' => 'verification-new',
@@ -179,9 +184,49 @@ it('requests and stores a replacement verification on resend', function (): void
     );
 
     expect($result)->toBe(['resent' => true])
-        ->and(Session::get('otp_verification.flow-123'))->toBe('verification-new');
+        ->and(Session::get('otp_verification.flow-123'))->toBe('verification-new')
+        ->and(Session::get('otp_delivery.flow-123.resends'))->toBe(1);
 
     Http::assertSentCount(1);
+});
+
+it('enforces resend cooldown and maximum attempts on the server', function (): void {
+    Session::put('otp_delivery.flow-123', [
+        'resends' => 0,
+        'sent_at' => now()->timestamp,
+    ]);
+    Http::fake();
+
+    expect(fn () => (new OtpHandler)->handle(
+        Request::create('/', 'POST', ['resend' => true]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
+    ))->toThrow(ValidationException::class, 'Please wait 30 seconds');
+
+    Session::put('otp_delivery.flow-123', [
+        'resends' => 3,
+        'sent_at' => now()->subMinute()->timestamp,
+    ]);
+
+    expect(fn () => (new OtpHandler)->handle(
+        Request::create('/', 'POST', ['resend' => true]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
+    ))->toThrow(ValidationException::class, 'maximum number');
+
+    Http::assertNothingSent();
+});
+
+it('fails closed before provider delivery when no mobile was collected', function (): void {
+    Session::forget('form_flow.flow-123');
+    Http::fake();
+
+    expect(fn () => (new OtpHandler)->render(
+        otpStep(),
+        ['flow_id' => 'flow-123'],
+    ))->toThrow(ValidationException::class, 'A mobile number must be collected');
+
+    Http::assertNothingSent();
 });
 
 it('publishes the supported configuration schema', function (): void {

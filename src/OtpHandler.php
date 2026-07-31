@@ -36,6 +36,8 @@ class OtpHandler implements FormHandlerInterface
 
         // Check if this is a resend request
         if ($request->input('resend')) {
+            $this->ensureMobileIsAvailable($mobile);
+
             return $this->handleResend($referenceId, $mobile);
         }
 
@@ -75,6 +77,7 @@ class OtpHandler implements FormHandlerInterface
 
         // Clear session
         Session::forget("otp_verification.{$referenceId}");
+        Session::forget("otp_delivery.{$referenceId}");
 
         // Return validated data
         return OtpData::from([
@@ -97,6 +100,7 @@ class OtpHandler implements FormHandlerInterface
 
         // Get mobile from collected data in session
         $mobile = $this->getMobileFromSession($referenceId);
+        $this->ensureMobileIsAvailable($mobile);
 
         // Request OTP on first visit
         $sessionKey = "otp_verification.{$referenceId}";
@@ -108,6 +112,10 @@ class OtpHandler implements FormHandlerInterface
 
             // Store verification_id in session
             Session::put($sessionKey, $result['verification_id']);
+            Session::put("otp_delivery.{$referenceId}", [
+                'resends' => 0,
+                'sent_at' => now()->timestamp,
+            ]);
         }
 
         // Render OTP capture page
@@ -162,13 +170,50 @@ class OtpHandler implements FormHandlerInterface
      */
     protected function handleResend(string $referenceId, string $mobile): array
     {
+        $deliveryKey = "otp_delivery.{$referenceId}";
+        $delivery = Session::get($deliveryKey, [
+            'resends' => 0,
+            'sent_at' => 0,
+        ]);
+        $maxResends = (int) config('otp-handler.max_resends', 3);
+        $cooldown = (int) config('otp-handler.resend_cooldown', 30);
+
+        if ((int) $delivery['resends'] >= $maxResends) {
+            throw ValidationException::withMessages([
+                'resend' => ['The maximum number of OTP resend attempts has been reached.'],
+            ]);
+        }
+
+        $retryAfter = $cooldown - (now()->timestamp - (int) $delivery['sent_at']);
+
+        if ($retryAfter > 0) {
+            throw ValidationException::withMessages([
+                'resend' => [sprintf('Please wait %d seconds before requesting another OTP.', $retryAfter)],
+            ]);
+        }
+
         // Request new OTP from txtcmdr API
         $client = new TxtcmdrClient;
         $result = $client->requestOtp($mobile, $referenceId);
 
         // Update verification_id in session
         Session::put("otp_verification.{$referenceId}", $result['verification_id']);
+        Session::put($deliveryKey, [
+            'resends' => (int) $delivery['resends'] + 1,
+            'sent_at' => now()->timestamp,
+        ]);
 
         return ['resent' => true];
+    }
+
+    protected function ensureMobileIsAvailable(string $mobile): void
+    {
+        if ($mobile !== '') {
+            return;
+        }
+
+        throw ValidationException::withMessages([
+            'mobile' => ['A mobile number must be collected before OTP verification.'],
+        ]);
     }
 }
