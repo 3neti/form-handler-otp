@@ -1,154 +1,191 @@
 <?php
 
-use Illuminate\Support\Facades\Cache;
+declare(strict_types=1);
+
+use Illuminate\Http\Client\Request as HttpRequest;
+use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Session;
+use Illuminate\Validation\ValidationException;
+use Inertia\Response;
 use LBHurtado\FormFlowManager\Contracts\FormHandlerInterface;
 use LBHurtado\FormFlowManager\Data\FormFlowStepData;
-use LBHurtado\FormHandlerOtp\Actions\GenerateOtp;
-use LBHurtado\FormHandlerOtp\Actions\ValidateOtp;
 use LBHurtado\FormHandlerOtp\OtpHandler;
 
-it('implements FormHandlerInterface', function () {
-    $handler = new OtpHandler();
-    expect($handler)->toBeInstanceOf(FormHandlerInterface::class);
+beforeEach(function (): void {
+    config()->set('otp-handler.txtcmdr.base_url', 'https://txtcmdr.example.test');
+    config()->set('otp-handler.txtcmdr.api_token', 'test-api-token');
+    config()->set('otp-handler.txtcmdr.timeout', 5);
+
+    Session::put('form_flow.flow-123', [
+        'collected_data' => [
+            'recipient' => ['mobile' => '639171234567'],
+        ],
+    ]);
 });
 
-it('returns correct handler name', function () {
-    $handler = new OtpHandler();
-    expect($handler->getName())->toBe('otp');
+function otpStep(array $config = []): FormFlowStepData
+{
+    return new FormFlowStepData(handler: 'otp', config: $config);
+}
+
+/**
+ * @return array{component: string, props: array<string, mixed>}
+ */
+function inertiaPayload(Response $response): array
+{
+    return [
+        'component' => (fn (): string => $this->component)->call($response),
+        'props' => (fn (): array => $this->props)->call($response),
+    ];
+}
+
+it('implements the form handler contract', function (): void {
+    $handler = new OtpHandler;
+
+    expect($handler)
+        ->toBeInstanceOf(FormHandlerInterface::class)
+        ->and($handler->getName())->toBe('otp');
 });
 
-it('generates valid OTP with correct format', function () {
-    $generator = new GenerateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
+it('requests an OTP on first render and exposes the current UI contract', function (): void {
+    Http::fake([
+        'https://txtcmdr.example.test/api/otp/request' => Http::response([
+            'verification_id' => 'verification-123',
+            'expires_in' => 300,
+        ]),
+    ]);
+
+    $response = (new OtpHandler)->render(
+        otpStep(['ui_variant' => 'compact']),
+        ['flow_id' => 'flow-123', 'step_index' => 2],
     );
-    
-    $result = $generator->execute('test-ref-123', '09171234567');
-    
-    expect($result)->toHaveKeys(['code', 'expires_at'])
-        ->and($result['code'])->toMatch('/^\d{4}$/')
-        ->and($result['expires_at'])->toBeString();
+    $payload = inertiaPayload($response);
+
+    expect($payload['component'])->toBe('form-flow/otp/OtpCapturePage')
+        ->and($payload['props'])->toMatchArray([
+            'flow_id' => 'flow-123',
+            'step' => '2',
+            'mobile' => '639171234567',
+            'ui_variant' => 'compact',
+        ])
+        ->and($payload['props']['config'])->toMatchArray([
+            'max_resends' => 3,
+            'resend_cooldown' => 30,
+            'digits' => 6,
+        ])
+        ->and(Session::get('otp_verification.flow-123'))->toBe('verification-123');
+
+    Http::assertSent(function (HttpRequest $request): bool {
+        return $request->url() === 'https://txtcmdr.example.test/api/otp/request'
+            && $request->hasHeader('Authorization', 'Bearer test-api-token')
+            && $request->data() === [
+                'mobile' => '639171234567',
+                'purpose' => 'verification',
+                'external_ref' => 'flow-123',
+            ];
+    });
 });
 
-it('caches OTP secret for validation', function () {
-    $generator = new GenerateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
-    );
-    
-    $generator->execute('test-ref-456', '09171234567');
-    
-    expect(Cache::has('otp.test-ref-456'))->toBeTrue();
+it('reuses the active verification session when rendering again', function (): void {
+    Session::put('otp_verification.flow-123', 'verification-existing');
+    Http::fake();
+
+    (new OtpHandler)->render(otpStep(), ['flow_id' => 'flow-123']);
+
+    Http::assertNothingSent();
+    expect(Session::get('otp_verification.flow-123'))->toBe('verification-existing');
 });
 
-it('validates correct OTP', function () {
-    $generator = new GenerateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
+it('verifies the submitted code and clears the verification session', function (): void {
+    Session::put('otp_verification.flow-123', 'verification-123');
+    Http::fake([
+        'https://txtcmdr.example.test/api/otp/verify' => Http::response([
+            'ok' => true,
+            'reason' => 'verified',
+            'attempts' => 1,
+            'status' => 'verified',
+        ]),
+    ]);
+
+    $result = (new OtpHandler)->handle(
+        Request::create('/', 'POST', ['data' => ['otp_code' => '123456']]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
     );
-    
-    $result = $generator->execute('test-ref-789', '09171234567');
-    
-    $validator = new ValidateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
-    );
-    
-    $isValid = $validator->execute('test-ref-789', $result['code']);
-    
-    expect($isValid)->toBeTrue();
+
+    expect($result)->toMatchArray([
+        'mobile' => '639171234567',
+        'otp_code' => '123456',
+        'reference_id' => 'flow-123',
+    ])
+        ->and($result['verified_at'])->toBeString()
+        ->and(Session::has('otp_verification.flow-123'))->toBeFalse();
+
+    Http::assertSent(function (HttpRequest $request): bool {
+        return $request->url() === 'https://txtcmdr.example.test/api/otp/verify'
+            && $request->data() === [
+                'verification_id' => 'verification-123',
+                'code' => '123456',
+            ];
+    });
 });
 
-it('rejects incorrect OTP', function () {
-    $generator = new GenerateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
-    );
-    
-    $generator->execute('test-ref-wrong', '09171234567');
-    
-    $validator = new ValidateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
-    );
-    
-    $isValid = $validator->execute('test-ref-wrong', '9999');
-    
-    expect($isValid)->toBeFalse();
+it('maps provider rejection to a validation error without clearing the session', function (): void {
+    Session::put('otp_verification.flow-123', 'verification-123');
+    Http::fake([
+        'https://txtcmdr.example.test/api/otp/verify' => Http::response([
+            'ok' => false,
+            'reason' => 'invalid_code',
+            'attempts' => 2,
+            'status' => 'pending',
+        ]),
+    ]);
+
+    expect(fn () => (new OtpHandler)->handle(
+        Request::create('/', 'POST', ['data' => ['otp_code' => '999999']]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
+    ))->toThrow(ValidationException::class, 'The OTP code is incorrect.');
+
+    expect(Session::get('otp_verification.flow-123'))->toBe('verification-123');
 });
 
-it('clears cache after successful validation', function () {
-    $generator = new GenerateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
-    );
-    
-    $result = $generator->execute('test-ref-clear', '09171234567');
-    
-    $validator = new ValidateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
-    );
-    
-    $validator->execute('test-ref-clear', $result['code']);
-    
-    expect(Cache::has('otp.test-ref-clear'))->toBeFalse();
+it('fails closed when the verification session has expired', function (): void {
+    Http::fake();
+
+    expect(fn () => (new OtpHandler)->handle(
+        Request::create('/', 'POST', ['data' => ['otp_code' => '123456']]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
+    ))->toThrow(ValidationException::class, 'Verification session expired.');
+
+    Http::assertNothingSent();
 });
 
-it('returns false for expired/non-existent OTP', function () {
-    $validator = new ValidateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 4
+it('requests and stores a replacement verification on resend', function (): void {
+    Session::put('otp_verification.flow-123', 'verification-old');
+    Http::fake([
+        'https://txtcmdr.example.test/api/otp/request' => Http::response([
+            'verification_id' => 'verification-new',
+            'expires_in' => 300,
+        ]),
+    ]);
+
+    $result = (new OtpHandler)->handle(
+        Request::create('/', 'POST', ['resend' => true]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
     );
-    
-    $isValid = $validator->execute('non-existent-ref', '1234');
-    
-    expect($isValid)->toBeFalse();
+
+    expect($result)->toBe(['resent' => true])
+        ->and(Session::get('otp_verification.flow-123'))->toBe('verification-new');
+
+    Http::assertSentCount(1);
 });
 
-it('has correct config schema', function () {
-    $handler = new OtpHandler();
-    $schema = $handler->getConfigSchema();
-    
-    expect($schema)->toHaveKeys(['max_resends', 'resend_cooldown', 'digits'])
-        ->and($schema['max_resends'])->toBeString()
-        ->and($schema['resend_cooldown'])->toBeString()
-        ->and($schema['digits'])->toBeString();
-});
-
-it('validates OTP with different digit lengths', function () {
-    // Test with 6 digits
-    $generator = new GenerateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 6
-    );
-    
-    $result = $generator->execute('test-ref-six', '09171234567');
-    
-    expect($result['code'])->toMatch('/^\d{6}$/');
-    
-    $validator = new ValidateOtp(
-        cachePrefix: 'otp',
-        period: 600,
-        digits: 6
-    );
-    
-    $isValid = $validator->execute('test-ref-six', $result['code']);
-    
-    expect($isValid)->toBeTrue();
-});
-
-it('handler returns otp as name', function () {
-    $handler = app(OtpHandler::class);
-    expect($handler->getName())->toBe('otp');
+it('publishes the supported configuration schema', function (): void {
+    expect((new OtpHandler)->getConfigSchema())
+        ->toHaveKeys(['max_resends', 'resend_cooldown', 'digits', 'ui_variant'])
+        ->and((new OtpHandler)->validate([], []))->toBeTrue();
 });
