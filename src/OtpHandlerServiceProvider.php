@@ -44,6 +44,8 @@ class OtpHandlerServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        $this->loadRoutesFrom(__DIR__.'/../routes/web.php');
+
         // Register console commands
         if ($this->app->runningInConsole()) {
             $this->commands([

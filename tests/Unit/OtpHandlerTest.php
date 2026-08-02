@@ -2,25 +2,78 @@
 
 declare(strict_types=1);
 
-use Illuminate\Http\Client\Request as HttpRequest;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Session;
 use Illuminate\Validation\ValidationException;
 use Inertia\Response;
 use LBHurtado\FormFlowManager\Contracts\FormHandlerInterface;
 use LBHurtado\FormFlowManager\Data\FormFlowStepData;
+use LBHurtado\FormHandlerOtp\Contracts\OtpChallengeGateway;
+use LBHurtado\FormHandlerOtp\Data\OtpChallengeData;
+use LBHurtado\FormHandlerOtp\Data\OtpChallengeRequestData;
+use LBHurtado\FormHandlerOtp\Data\OtpVerificationProofData;
+use LBHurtado\FormHandlerOtp\Data\OtpVerificationResultData;
 use LBHurtado\FormHandlerOtp\OtpHandler;
-use LBHurtado\FormHandlerOtp\Services\TxtcmdrClient;
+
+class FakeOtpChallengeGateway implements OtpChallengeGateway
+{
+    public ?OtpChallengeRequestData $created = null;
+
+    public int $resends = 0;
+
+    public OtpVerificationResultData $verification;
+
+    public function __construct()
+    {
+        $this->verification = new OtpVerificationResultData(
+            ok: true,
+            reason: 'verified',
+            proof: new OtpVerificationProofData(
+                reference: 'challenge-123',
+                purpose: 'onboarding.account',
+                verified_at: '2026-08-02T12:00:00+08:00',
+            ),
+        );
+    }
+
+    public function create(OtpChallengeRequestData $request): OtpChallengeData
+    {
+        $this->created = $request;
+
+        return new OtpChallengeData('challenge-123', 'queued', 300);
+    }
+
+    public function status(string $challengeReference): OtpChallengeData
+    {
+        return new OtpChallengeData($challengeReference, 'ready', 240, true);
+    }
+
+    public function resend(string $challengeReference): OtpChallengeData
+    {
+        $this->resends++;
+
+        return new OtpChallengeData($challengeReference, 'queued', 300);
+    }
+
+    public function verify(string $challengeReference, string $code): OtpVerificationResultData
+    {
+        return $this->verification;
+    }
+}
 
 beforeEach(function (): void {
-    config()->set('otp-handler.txtcmdr.base_url', 'https://txtcmdr.example.test');
-    config()->set('otp-handler.txtcmdr.api_token', 'test-api-token');
-    config()->set('otp-handler.txtcmdr.timeout', 5);
-
+    $this->gateway = new FakeOtpChallengeGateway;
+    app()->instance(OtpChallengeGateway::class, $this->gateway);
     Session::put('form_flow.flow-123', [
+        'current_step' => 1,
+        'instructions' => [
+            'steps' => [
+                ['handler' => 'form', 'config' => []],
+                ['handler' => 'otp', 'config' => ['purpose' => 'onboarding.account']],
+            ],
+        ],
         'collected_data' => [
-            'recipient' => ['mobile' => '639171234567'],
+            ['mobile' => '+639171234567'],
         ],
     ]);
 });
@@ -41,214 +94,112 @@ function inertiaPayload(Response $response): array
     ];
 }
 
-it('implements the form handler contract', function (): void {
-    $handler = new OtpHandler;
-
-    expect($handler)
-        ->toBeInstanceOf(FormHandlerInterface::class)
-        ->and($handler->getName())->toBe('otp');
-});
-
-it('requests an OTP on first render and exposes the current UI contract', function (): void {
-    Http::fake([
-        'https://txtcmdr.example.test/api/v1/otp/challenges' => Http::response([
-            'verification_id' => 'verification-123',
-            'status' => 'queued',
-            'expires_in' => 300,
-            'replayed' => false,
-        ]),
-    ]);
-
-    $response = (new OtpHandler)->render(
+it('implements the handler contract without sending on render', function (): void {
+    $handler = app(OtpHandler::class);
+    $payload = inertiaPayload($handler->render(
         otpStep(['ui_variant' => 'compact']),
-        ['flow_id' => 'flow-123', 'step_index' => 2],
-    );
-    $payload = inertiaPayload($response);
+        ['flow_id' => 'flow-123', 'step_index' => 1],
+    ));
 
-    expect($payload['component'])->toBe('form-flow/otp/OtpCapturePage')
+    expect($handler)->toBeInstanceOf(FormHandlerInterface::class)
+        ->and($payload['component'])->toBe('form-flow/otp/OtpCapturePage')
         ->and($payload['props'])->toMatchArray([
             'flow_id' => 'flow-123',
-            'step' => '2',
-            'mobile' => '639171234567',
-            'ui_variant' => 'compact',
+            'step' => '1',
+            'mobile' => '+639171234567',
+            'challenge_status' => 'idle',
         ])
-        ->and($payload['props']['config'])->toMatchArray([
-            'max_resends' => 3,
-            'resend_cooldown' => 30,
-            'digits' => 6,
-        ])
-        ->and(Session::get('otp_verification.flow-123'))->toBe('verification-123');
-
-    Http::assertSent(function (HttpRequest $request): bool {
-        return $request->url() === 'https://txtcmdr.example.test/api/v1/otp/challenges'
-            && $request->hasHeader('Authorization', 'Bearer test-api-token')
-            && $request->data() === [
-                'mobile' => '639171234567',
-                'purpose' => 'verification',
-                'client_reference' => 'flow-123',
-            ];
-    });
+        ->and($this->gateway->created)->toBeNull()
+        ->and(Session::has('otp_challenge.flow-123'))->toBeFalse();
 });
 
-it('reuses the active verification session when rendering again', function (): void {
-    Session::put('otp_verification.flow-123', 'verification-existing');
-    Http::fake();
+it('explicitly requests a challenge and stores only its reference and state', function (): void {
+    $result = app(OtpHandler::class)->requestChallenge(
+        otpStep(['purpose' => 'onboarding.account']),
+        ['flow_id' => 'flow-123', 'step_index' => 1],
+    );
 
-    (new OtpHandler)->render(otpStep(), ['flow_id' => 'flow-123']);
-
-    Http::assertNothingSent();
-    expect(Session::get('otp_verification.flow-123'))->toBe('verification-existing');
+    expect($result)->toMatchArray(['status' => 'queued', 'expires_in' => 300])
+        ->and($this->gateway->created?->mobile)->toBe('+639171234567')
+        ->and($this->gateway->created?->purpose)->toBe('onboarding.account')
+        ->and($this->gateway->created?->client_reference)->toBe('form-flow:flow-123:step:1')
+        ->and(Session::get('otp_challenge.flow-123.reference'))->toBe('challenge-123');
 });
 
-it('verifies the submitted code and clears the verification session', function (): void {
-    Session::put('otp_verification.flow-123', 'verification-123');
-    Http::fake([
-        'https://txtcmdr.example.test/api/v1/otp/challenges/verification-123/verify' => Http::response([
-            'ok' => true,
-            'reason' => 'verified',
-            'attempts' => 1,
-            'status' => 'verified',
-        ]),
+it('verifies through the gateway and returns proof without the raw code', function (): void {
+    Session::put('otp_challenge.flow-123', [
+        'reference' => 'challenge-123',
+        'status' => 'ready',
+        'expires_in' => 240,
     ]);
 
-    $result = (new OtpHandler)->handle(
+    $result = app(OtpHandler::class)->handle(
         Request::create('/', 'POST', ['data' => ['otp_code' => '123456']]),
         otpStep(),
         ['flow_id' => 'flow-123'],
     );
 
     expect($result)->toMatchArray([
-        'mobile' => '639171234567',
-        'otp_code' => '123456',
+        'mobile' => '+639171234567',
         'reference_id' => 'flow-123',
-    ])
-        ->and($result['verified_at'])->toBeString()
-        ->and(Session::has('otp_verification.flow-123'))->toBeFalse()
-        ->and(Session::has('otp_delivery.flow-123'))->toBeFalse();
-
-    Http::assertSent(function (HttpRequest $request): bool {
-        return $request->url() === 'https://txtcmdr.example.test/api/v1/otp/challenges/verification-123/verify'
-            && $request->data() === ['code' => '123456'];
-    });
+        'verification_reference' => 'challenge-123',
+        'verification_purpose' => 'onboarding.account',
+        'verified_at' => '2026-08-02T12:00:00+08:00',
+    ])->not->toHaveKey('otp_code')
+        ->and(Session::has('otp_challenge.flow-123'))->toBeFalse();
 });
 
-it('maps provider rejection to a validation error without clearing the session', function (): void {
-    Session::put('otp_verification.flow-123', 'verification-123');
-    Http::fake([
-        'https://txtcmdr.example.test/api/v1/otp/challenges/verification-123/verify' => Http::response([
-            'ok' => false,
-            'reason' => 'invalid_code',
-            'attempts' => 2,
-            'status' => 'pending',
-        ]),
-    ]);
-
-    expect(fn () => (new OtpHandler)->handle(
-        Request::create('/', 'POST', ['data' => ['otp_code' => '999999']]),
-        otpStep(),
-        ['flow_id' => 'flow-123'],
-    ))->toThrow(ValidationException::class, 'The OTP code is incorrect.');
-
-    expect(Session::get('otp_verification.flow-123'))->toBe('verification-123');
-});
-
-it('fails closed when the verification session has expired', function (): void {
-    Http::fake();
-
-    expect(fn () => (new OtpHandler)->handle(
+it('requires an explicit challenge before verification', function (): void {
+    expect(fn () => app(OtpHandler::class)->handle(
         Request::create('/', 'POST', ['data' => ['otp_code' => '123456']]),
         otpStep(),
         ['flow_id' => 'flow-123'],
-    ))->toThrow(ValidationException::class, 'Verification session expired.');
-
-    Http::assertNothingSent();
+    ))->toThrow(ValidationException::class, 'Send a verification code');
 });
 
-it('requests and stores a replacement verification on resend', function (): void {
-    Session::put('otp_verification.flow-123', 'verification-old');
+it('fails closed when the provider omits a verification proof', function (): void {
+    Session::put('otp_challenge.flow-123.reference', 'challenge-123');
+    $this->gateway->verification = new OtpVerificationResultData(true, 'verified');
+
+    expect(fn () => app(OtpHandler::class)->handle(
+        Request::create('/', 'POST', ['data' => ['otp_code' => '123456']]),
+        otpStep(),
+        ['flow_id' => 'flow-123'],
+    ))->toThrow(ValidationException::class, 'did not return a valid proof');
+});
+
+it('resends without completing or advancing the form flow', function (): void {
+    Session::put('otp_challenge.flow-123.reference', 'challenge-123');
     Session::put('otp_delivery.flow-123', [
         'resends' => 0,
         'sent_at' => now()->subSeconds(31)->timestamp,
     ]);
-    Http::fake([
-        'https://txtcmdr.example.test/api/v1/otp/challenges' => Http::response([
-            'verification_id' => 'verification-new',
-            'status' => 'queued',
-            'expires_in' => 300,
-            'replayed' => false,
-        ]),
-    ]);
 
-    $result = (new OtpHandler)->handle(
-        Request::create('/', 'POST', ['resend' => true]),
-        otpStep(),
-        ['flow_id' => 'flow-123'],
-    );
+    $this->postJson('/form-flow/flow-123/step/1/otp-challenge/resend')
+        ->assertOk()
+        ->assertJsonPath('resent', true);
 
-    expect($result)->toBe(['resent' => true])
-        ->and(Session::get('otp_verification.flow-123'))->toBe('verification-new')
-        ->and(Session::get('otp_delivery.flow-123.resends'))->toBe(1);
-
-    Http::assertSentCount(1);
+    expect($this->gateway->resends)->toBe(1)
+        ->and(Session::get('form_flow.flow-123.current_step'))->toBe(1)
+        ->and(Session::get('form_flow.flow-123.collected_data'))->toHaveCount(1);
 });
 
-it('enforces resend cooldown and maximum attempts on the server', function (): void {
-    Session::put('otp_delivery.flow-123', [
-        'resends' => 0,
-        'sent_at' => now()->timestamp,
-    ]);
-    Http::fake();
+it('sends through the dedicated endpoint without completing the step', function (): void {
+    $this->postJson('/form-flow/flow-123/step/1/otp-challenge')
+        ->assertOk()
+        ->assertJsonPath('status', 'queued');
 
-    expect(fn () => (new OtpHandler)->handle(
-        Request::create('/', 'POST', ['resend' => true]),
-        otpStep(),
-        ['flow_id' => 'flow-123'],
-    ))->toThrow(ValidationException::class, 'Please wait 30 seconds');
-
-    Session::put('otp_delivery.flow-123', [
-        'resends' => 3,
-        'sent_at' => now()->subMinute()->timestamp,
-    ]);
-
-    expect(fn () => (new OtpHandler)->handle(
-        Request::create('/', 'POST', ['resend' => true]),
-        otpStep(),
-        ['flow_id' => 'flow-123'],
-    ))->toThrow(ValidationException::class, 'maximum number');
-
-    Http::assertNothingSent();
+    expect(Session::get('form_flow.flow-123.current_step'))->toBe(1)
+        ->and(Session::get('form_flow.flow-123.collected_data'))->toHaveCount(1);
 });
 
-it('fails closed before provider delivery when no mobile was collected', function (): void {
-    Session::forget('form_flow.flow-123');
-    Http::fake();
-
-    expect(fn () => (new OtpHandler)->render(
-        otpStep(),
-        ['flow_id' => 'flow-123'],
-    ))->toThrow(ValidationException::class, 'A mobile number must be collected');
-
-    Http::assertNothingSent();
+it('rejects challenge actions for a non-current or non-OTP step', function (): void {
+    $this->postJson('/form-flow/flow-123/step/0/otp-challenge')->assertNotFound();
+    $this->postJson('/form-flow/flow-123/step/2/otp-challenge')->assertNotFound();
 });
 
 it('publishes the supported configuration schema', function (): void {
-    expect((new OtpHandler)->getConfigSchema())
-        ->toHaveKeys(['max_resends', 'resend_cooldown', 'digits', 'ui_variant'])
-        ->and((new OtpHandler)->validate([], []))->toBeTrue();
-});
-
-it('fails safely when Txtcmdr credentials are absent', function (): void {
-    config()->set('otp-handler.txtcmdr.api_token');
-
-    expect(fn () => new TxtcmdrClient)
-        ->toThrow(InvalidArgumentException::class, 'Txtcmdr API token is not configured.');
-});
-
-it('rejects malformed provider responses', function (): void {
-    Http::fake([
-        'https://txtcmdr.example.test/api/v1/otp/challenges' => Http::response(['status' => 'accepted']),
-    ]);
-
-    expect(fn () => (new TxtcmdrClient)->requestOtp('639171234567', 'flow-123'))
-        ->toThrow(UnexpectedValueException::class, 'invalid OTP challenge response');
+    expect(app(OtpHandler::class)->getConfigSchema())
+        ->toHaveKeys(['purpose', 'max_resends', 'resend_cooldown', 'digits', 'ui_variant'])
+        ->and(app(OtpHandler::class)->validate([], []))->toBeTrue();
 });

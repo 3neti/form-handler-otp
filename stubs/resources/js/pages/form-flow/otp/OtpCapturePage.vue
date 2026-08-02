@@ -1,6 +1,11 @@
 <script setup lang="ts">
-import { Head, router, useForm } from "@inertiajs/vue3";
+import { Head, router, useHttp } from "@inertiajs/vue3";
 import { computed, onMounted, ref, watch } from "vue";
+import {
+  resend as resendOtpChallenge,
+  store as sendOtpChallenge,
+} from "@/actions/LBHurtado/FormHandlerOtp/Http/Controllers/OtpChallengeController";
+import { updateStep } from "@/actions/LBHurtado/FormFlowManager/Http/Controllers/FormFlowController";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import InputError from "@/components/InputError.vue";
@@ -12,6 +17,7 @@ interface Props {
   flow_id: string;
   step: string;
   mobile: string;
+  challenge_status: string;
   ui_variant?: FormFlowUiVariant | string | null;
   config: {
     max_resends: number;
@@ -22,9 +28,8 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const form = useForm({
-  otp_code: "",
-});
+const sendRequest = useHttp({});
+const resendRequest = useHttp({});
 
 const otpCode = ref("");
 const processing = ref(false);
@@ -36,6 +41,7 @@ const cooldownInterval = ref<ReturnType<typeof setInterval> | null>(null);
 const isSending = ref(false);
 const resendMessage = ref("");
 const resendCount = ref(0);
+const challengeStatus = ref(props.challenge_status);
 
 const MAX_RESENDS = computed(() => props.config.max_resends);
 const COOLDOWN_SECONDS = computed(() => props.config.resend_cooldown);
@@ -48,9 +54,13 @@ const normalizedOtp = computed(() => {
 
 const canSubmit = computed(() => {
   return (
-    !processing.value && normalizedOtp.value.length === props.config.digits
+    challengeStatus.value !== "idle" &&
+    !processing.value &&
+    normalizedOtp.value.length === props.config.digits
   );
 });
+
+const codeRequested = computed(() => challengeStatus.value !== "idle");
 
 function updateOtp(value: string | number) {
   otpCode.value = String(value ?? "")
@@ -65,7 +75,7 @@ function submit() {
   errors.value = {};
 
   router.post(
-    `/form-flow/${props.flow_id}/step/${props.step}`,
+    updateStep.url({ flow_id: props.flow_id, step: props.step }),
     {
       data: {
         otp_code: normalizedOtp.value,
@@ -74,21 +84,29 @@ function submit() {
     {
       preserveScroll: true,
       onError: (pageErrors) => {
-        console.error("[OtpCapturePage] submit errors", pageErrors);
         errors.value = pageErrors;
-      },
-      onSuccess: () => {
-        console.log("[OtpCapturePage] submit success");
       },
       onFinish: () => {
         processing.value = false;
-        console.log("[OtpCapturePage] submit finished");
       },
     },
   );
 }
 
-function resendOtp() {
+async function sendOtp() {
+  resendMessage.value = "";
+
+  const response = await sendRequest.post(
+    sendOtpChallenge.url({ flowId: props.flow_id, step: props.step }),
+  );
+
+  challengeStatus.value = String(response.data?.status ?? "requested");
+  resendMessage.value = "Verification code requested.";
+  startCooldown();
+  otpInputRef.value?.focus();
+}
+
+async function resendOtp() {
   if (cooldown.value > 0 || resendCount.value >= MAX_RESENDS.value) {
     return;
   }
@@ -96,26 +114,17 @@ function resendOtp() {
   isSending.value = true;
   resendMessage.value = "";
 
-  router.post(
-    `/form-flow/${props.flow_id}/step/${props.step}`,
-    {
-      resend: true,
-    },
-    {
-      preserveScroll: true,
-      onSuccess: () => {
-        resendCount.value++;
-        resendMessage.value = "OTP resent successfully.";
-        startCooldown();
-      },
-      onError: () => {
-        resendMessage.value = "Failed to resend OTP. Try again.";
-      },
-      onFinish: () => {
-        isSending.value = false;
-      },
-    },
-  );
+  try {
+    const response = await resendRequest.post(
+      resendOtpChallenge.url({ flowId: props.flow_id, step: props.step }),
+    );
+    challengeStatus.value = String(response.data?.status ?? "requested");
+    resendCount.value++;
+    resendMessage.value = "Verification code requested again.";
+    startCooldown();
+  } finally {
+    isSending.value = false;
+  }
 }
 
 function startCooldown() {
@@ -144,7 +153,7 @@ const hasOtpError = ref(false);
 
 // Watch for OTP validation error once
 watch(
-  () => form.errors.otp_code,
+  () => errors.value.otp_code,
   (error) => {
     if (error && !hasOtpError.value) {
       hasOtpError.value = true;
@@ -194,6 +203,7 @@ onMounted(() => {
           pattern="[0-9]*"
           autocomplete="one-time-code"
           placeholder="Enter OTP"
+          :disabled="!codeRequested"
           required
           @update:model-value="updateOtp"
         />
@@ -201,12 +211,12 @@ onMounted(() => {
         <div class="flex items-center justify-between text-sm min-h-[1.25rem]">
           <!-- Error message on the left -->
           <div class="text-red-600">
-            <InputError :message="form.errors.otp_code" />
+            <InputError :message="errors.otp_code" />
           </div>
 
           <!-- Show "OTP sent" initially; hide after first error -->
-          <div v-if="!hasOtpError" class="text-gray-500 dark:text-gray-400">
-            OTP has been sent.
+          <div v-if="!codeRequested" class="text-gray-500 dark:text-gray-400">
+            Send a code to continue.
           </div>
 
           <!-- Show Resend OTP only after error -->
@@ -241,8 +251,18 @@ onMounted(() => {
       </div>
 
       <!-- Submit Button -->
-      <div>
+      <div class="grid gap-3">
+        <button
+          v-if="!codeRequested"
+          type="button"
+          class="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
+          :disabled="sendRequest.processing"
+          @click="sendOtp"
+        >
+          {{ sendRequest.processing ? "Requesting…" : "Send Verification Code" }}
+        </button>
         <FormFlowActions
+          v-else
           :variant="ui_variant"
           :show-secondary="false"
           primary-label="Verify OTP"
