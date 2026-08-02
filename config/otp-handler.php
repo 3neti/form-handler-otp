@@ -1,6 +1,7 @@
 <?php
 
 return [
+    'driver' => env('OTP_HANDLER_DRIVER', 'unavailable'),
     /*
     |--------------------------------------------------------------------------
     | Application Label
@@ -22,7 +23,9 @@ return [
     'txtcmdr' => [
         'base_url' => env('TXTCMDR_API_URL', 'http://txtcmdr.test'),
         'api_token' => env('TXTCMDR_API_TOKEN'),
-        'timeout' => env('TXTCMDR_TIMEOUT', 30),
+        'connect_timeout' => (int) env('TXTCMDR_CONNECT_TIMEOUT', 5),
+        'timeout' => (int) env('TXTCMDR_TIMEOUT', 15),
+        'verify_ssl' => (bool) env('TXTCMDR_VERIFY_SSL', true),
     ],
 
     /*

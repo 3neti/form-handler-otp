@@ -29,6 +29,7 @@ class TestCase extends Orchestra
 
         $app['config']->set('inertia.testing.ensure_pages_exist', false);
         $app['config']->set('otp-handler.label', 'Test App');
+        $app['config']->set('otp-handler.driver', 'txtcmdr');
         $app['config']->set('otp-handler.max_resends', 3);
         $app['config']->set('otp-handler.resend_cooldown', 30);
     }

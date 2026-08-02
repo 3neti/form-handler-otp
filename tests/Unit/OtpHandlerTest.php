@@ -51,9 +51,11 @@ it('implements the form handler contract', function (): void {
 
 it('requests an OTP on first render and exposes the current UI contract', function (): void {
     Http::fake([
-        'https://txtcmdr.example.test/api/otp/request' => Http::response([
+        'https://txtcmdr.example.test/api/v1/otp/challenges' => Http::response([
             'verification_id' => 'verification-123',
+            'status' => 'queued',
             'expires_in' => 300,
+            'replayed' => false,
         ]),
     ]);
 
@@ -78,12 +80,12 @@ it('requests an OTP on first render and exposes the current UI contract', functi
         ->and(Session::get('otp_verification.flow-123'))->toBe('verification-123');
 
     Http::assertSent(function (HttpRequest $request): bool {
-        return $request->url() === 'https://txtcmdr.example.test/api/otp/request'
+        return $request->url() === 'https://txtcmdr.example.test/api/v1/otp/challenges'
             && $request->hasHeader('Authorization', 'Bearer test-api-token')
             && $request->data() === [
                 'mobile' => '639171234567',
                 'purpose' => 'verification',
-                'external_ref' => 'flow-123',
+                'client_reference' => 'flow-123',
             ];
     });
 });
@@ -101,7 +103,7 @@ it('reuses the active verification session when rendering again', function (): v
 it('verifies the submitted code and clears the verification session', function (): void {
     Session::put('otp_verification.flow-123', 'verification-123');
     Http::fake([
-        'https://txtcmdr.example.test/api/otp/verify' => Http::response([
+        'https://txtcmdr.example.test/api/v1/otp/challenges/verification-123/verify' => Http::response([
             'ok' => true,
             'reason' => 'verified',
             'attempts' => 1,
@@ -125,18 +127,15 @@ it('verifies the submitted code and clears the verification session', function (
         ->and(Session::has('otp_delivery.flow-123'))->toBeFalse();
 
     Http::assertSent(function (HttpRequest $request): bool {
-        return $request->url() === 'https://txtcmdr.example.test/api/otp/verify'
-            && $request->data() === [
-                'verification_id' => 'verification-123',
-                'code' => '123456',
-            ];
+        return $request->url() === 'https://txtcmdr.example.test/api/v1/otp/challenges/verification-123/verify'
+            && $request->data() === ['code' => '123456'];
     });
 });
 
 it('maps provider rejection to a validation error without clearing the session', function (): void {
     Session::put('otp_verification.flow-123', 'verification-123');
     Http::fake([
-        'https://txtcmdr.example.test/api/otp/verify' => Http::response([
+        'https://txtcmdr.example.test/api/v1/otp/challenges/verification-123/verify' => Http::response([
             'ok' => false,
             'reason' => 'invalid_code',
             'attempts' => 2,
@@ -172,9 +171,11 @@ it('requests and stores a replacement verification on resend', function (): void
         'sent_at' => now()->subSeconds(31)->timestamp,
     ]);
     Http::fake([
-        'https://txtcmdr.example.test/api/otp/request' => Http::response([
+        'https://txtcmdr.example.test/api/v1/otp/challenges' => Http::response([
             'verification_id' => 'verification-new',
+            'status' => 'queued',
             'expires_in' => 300,
+            'replayed' => false,
         ]),
     ]);
 
@@ -245,9 +246,9 @@ it('fails safely when Txtcmdr credentials are absent', function (): void {
 
 it('rejects malformed provider responses', function (): void {
     Http::fake([
-        'https://txtcmdr.example.test/api/otp/request' => Http::response(['status' => 'accepted']),
+        'https://txtcmdr.example.test/api/v1/otp/challenges' => Http::response(['status' => 'accepted']),
     ]);
 
     expect(fn () => (new TxtcmdrClient)->requestOtp('639171234567', 'flow-123'))
-        ->toThrow(UnexpectedValueException::class, 'invalid OTP request response');
+        ->toThrow(UnexpectedValueException::class, 'invalid OTP challenge response');
 });

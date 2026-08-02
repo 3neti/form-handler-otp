@@ -7,6 +7,9 @@ namespace LBHurtado\FormHandlerOtp;
 use Illuminate\Support\ServiceProvider;
 use LBHurtado\FormHandlerOtp\Console\InstallOtpHandlerCommand;
 use LBHurtado\FormHandlerOtp\Console\TestOtpCommand;
+use LBHurtado\FormHandlerOtp\Contracts\OtpChallengeGateway;
+use LBHurtado\FormHandlerOtp\Services\TxtcmdrOtpChallengeGateway;
+use LBHurtado\FormHandlerOtp\Services\UnavailableOtpChallengeGateway;
 
 /**
  * OTP Handler Service Provider
@@ -26,10 +29,14 @@ class OtpHandlerServiceProvider extends ServiceProvider
             'otp-handler'
         );
 
-        // Register OtpHandler as singleton
-        $this->app->singleton(OtpHandler::class, function ($app) {
-            return new OtpHandler;
+        $this->app->singleton(OtpChallengeGateway::class, function ($app): OtpChallengeGateway {
+            return match ($app['config']->get('otp-handler.driver')) {
+                'txtcmdr' => $app->make(TxtcmdrOtpChallengeGateway::class),
+                default => $app->make(UnavailableOtpChallengeGateway::class),
+            };
         });
+
+        $this->app->singleton(OtpHandler::class);
     }
 
     /**
