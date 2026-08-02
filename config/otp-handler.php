@@ -21,7 +21,7 @@ return [
     |
     */
     'txtcmdr' => [
-        'base_url' => env('TXTCMDR_API_URL', 'http://txtcmdr.test'),
+        'base_url' => env('TXTCMDR_API_URL', 'https://txtcmdr.test'),
         'api_token' => env('TXTCMDR_API_TOKEN'),
         'connect_timeout' => (int) env('TXTCMDR_CONNECT_TIMEOUT', 5),
         'timeout' => (int) env('TXTCMDR_TIMEOUT', 15),

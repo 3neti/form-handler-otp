@@ -34,7 +34,10 @@ Configure the Txtcmdr endpoint and bearer token in the host environment:
 ```dotenv
 TXTCMDR_API_URL=https://txtcmdr.example
 TXTCMDR_API_TOKEN=
-TXTCMDR_TIMEOUT=30
+TXTCMDR_CONNECT_TIMEOUT=5
+TXTCMDR_TIMEOUT=15
+TXTCMDR_VERIFY_SSL=true
+OTP_HANDLER_DRIVER=txtcmdr
 
 OTP_MAX_RESENDS=3
 OTP_RESEND_COOLDOWN=30
@@ -51,6 +54,7 @@ Add an `otp` step after a step that collects `mobile`:
 [
     'handler' => 'otp',
     'config' => [
+        'purpose' => 'onboarding.account',
         'max_resends' => 3,
         'resend_cooldown' => 30,
         'digits' => 6,
@@ -62,27 +66,31 @@ Add an `otp` step after a step that collects `mobile`:
 The handler reads the mobile number from the current Form Flow session. It
 fails before contacting Txtcmdr if no mobile number has been collected.
 
-On the first render, the handler:
+Rendering the handler has no delivery side effect. The claimant explicitly
+selects **Send verification code**. The handler then:
 
-1. requests an OTP from `POST /api/otp/request`;
-2. stores only the returned verification identifier in the session;
-3. renders the OTP capture page.
+1. creates a challenge through `POST /api/v1/otp/challenges`;
+2. stores only the returned challenge reference in the session;
+3. enables verification and the throttled resend control.
 
-On submission, it verifies the code through `POST /api/otp/verify`. A successful
-verification clears the verification and delivery-control session state, then
+On submission, it verifies through
+`POST /api/v1/otp/challenges/{challenge}/verify`. A successful verification
+clears the challenge and delivery-control session state, then
 returns:
 
 ```php
 [
-    'mobile' => '639171234567',
-    'otp_code' => '123456',
+    'mobile' => '+639171234567',
     'verified_at' => '2026-07-31T15:00:00+08:00',
     'reference_id' => 'flow-123',
+    'verification_reference' => '01K...',
+    'verification_purpose' => 'onboarding.account',
 ]
 ```
 
-The returned code is Form Flow result data. Hosts should apply their own data
-retention and redaction policy before persisting or logging collected results.
+The raw code is never returned as Form Flow result data. Hosts must validate
+the structured proof against the expected purpose and claimant identity before
+executing a protected workflow.
 
 ## User interface
 
@@ -94,6 +102,7 @@ and focuses the code input on entry.
 ## Delivery safeguards
 
 - Verification identifiers are isolated by Form Flow reference in the session.
+- Opening or refreshing the page cannot send an SMS.
 - Successful codes are one-time because Txtcmdr is the verification authority
   and local session state is cleared after acceptance.
 - Resend count and cooldown are enforced by the server handler, not only by
