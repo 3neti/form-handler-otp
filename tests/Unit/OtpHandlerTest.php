@@ -7,6 +7,7 @@ use Illuminate\Support\Facades\Session;
 use Illuminate\Validation\ValidationException;
 use Inertia\Response;
 use LBHurtado\FormFlowManager\Contracts\FormHandlerInterface;
+use LBHurtado\FormFlowManager\Contracts\FormHandlerPreviewInterface;
 use LBHurtado\FormFlowManager\Data\FormFlowStepData;
 use LBHurtado\FormHandlerOtp\Contracts\OtpChallengeGateway;
 use LBHurtado\FormHandlerOtp\Data\OtpChallengeData;
@@ -113,6 +114,20 @@ it('implements the handler contract without sending on render', function (): voi
         ->and(Session::has('otp_challenge.flow-123'))->toBeFalse();
 });
 
+it('previews the production OTP screen without sending an OTP', function (): void {
+    $handler = app(OtpHandler::class);
+    $preview = $handler->preview(otpStep(), ['preview_mobile' => '09170000000']);
+
+    expect($handler)->toBeInstanceOf(FormHandlerPreviewInterface::class)
+        ->and($preview['component'])->toBe('form-flow/otp/OtpCapturePage')
+        ->and($preview['props'])->toMatchArray([
+            'mobile' => '09170000000',
+            'challenge_status' => 'requested',
+            'preview_mode' => true,
+        ])
+        ->and($this->gateway->created)->toBeNull();
+});
+
 it('explicitly requests a challenge and stores only its reference and state', function (): void {
     $result = app(OtpHandler::class)->requestChallenge(
         otpStep(['purpose' => 'onboarding.account']),
@@ -202,4 +217,9 @@ it('publishes the supported configuration schema', function (): void {
     expect(app(OtpHandler::class)->getConfigSchema())
         ->toHaveKeys(['purpose', 'max_resends', 'resend_cooldown', 'digits', 'ui_variant'])
         ->and(app(OtpHandler::class)->validate([], []))->toBeTrue();
+});
+test('published claim screen fails closed in preview mode', function () {
+    $source = file_get_contents(dirname(__DIR__, 2).'/stubs/resources/js/pages/form-flow/otp/OtpCapturePage.vue');
+
+    expect($source)->toContain('props.preview_mode');
 });

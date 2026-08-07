@@ -19,6 +19,7 @@ interface Props {
   mobile: string;
   challenge_status: string;
   ui_variant?: FormFlowUiVariant | string | null;
+  preview_mode?: boolean;
   config: {
     max_resends: number;
     resend_cooldown: number;
@@ -69,6 +70,7 @@ function updateOtp(value: string | number) {
 }
 
 function submit() {
+  if (props.preview_mode) return;
   if (!canSubmit.value) return;
 
   processing.value = true;
@@ -94,6 +96,7 @@ function submit() {
 }
 
 async function sendOtp() {
+  if (props.preview_mode) return;
   resendMessage.value = "";
 
   const response = await sendRequest.post(
@@ -107,6 +110,7 @@ async function sendOtp() {
 }
 
 async function resendOtp() {
+  if (props.preview_mode) return;
   if (cooldown.value > 0 || resendCount.value >= MAX_RESENDS.value) {
     return;
   }
@@ -164,6 +168,7 @@ watch(
 // Auto-focus OTP input on mount
 const otpInputRef = ref<HTMLInputElement | null>(null);
 onMounted(() => {
+  if (props.preview_mode) return;
   otpInputRef.value?.focus();
 });
 </script>

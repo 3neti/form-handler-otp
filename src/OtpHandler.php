@@ -9,13 +9,19 @@ use Illuminate\Support\Facades\Session;
 use Illuminate\Validation\ValidationException;
 use Inertia\Inertia;
 use LBHurtado\FormFlowManager\Contracts\FormHandlerInterface;
+use LBHurtado\FormFlowManager\Contracts\FormHandlerPreviewInterface;
 use LBHurtado\FormFlowManager\Data\FormFlowStepData;
 use LBHurtado\FormHandlerOtp\Contracts\OtpChallengeGateway;
 use LBHurtado\FormHandlerOtp\Data\OtpChallengeRequestData;
 use LBHurtado\FormHandlerOtp\Data\OtpData;
 use LBHurtado\FormHandlerOtp\Data\OtpVerificationProofData;
 
-class OtpHandler implements FormHandlerInterface
+/**
+ * OTP Handler
+ *
+ * Handles OTP generation, SMS delivery, and validation for form flows.
+ */
+class OtpHandler implements FormHandlerInterface, FormHandlerPreviewInterface
 {
     public function __construct(private OtpChallengeGateway $gateway) {}
 
@@ -78,7 +84,27 @@ class OtpHandler implements FormHandlerInterface
         $this->ensureMobileIsAvailable($mobile);
         $challenge = Session::get("otp_challenge.{$referenceId}");
 
-        return Inertia::render('form-flow/otp/OtpCapturePage', [
+        return Inertia::render('form-flow/otp/OtpCapturePage', $this->props($step, $context, $mobile, $challenge));
+    }
+
+    public function preview(FormFlowStepData $step, array $context = []): array
+    {
+        $mobile = (string) ($context['mobile'] ?? $context['preview_mobile'] ?? '0917 000 0000');
+
+        return [
+            'component' => 'form-flow/otp/OtpCapturePage',
+            'props' => $this->props(
+                $step,
+                array_merge($context, ['preview_mode' => true]),
+                $mobile,
+                ['status' => 'requested'],
+            ),
+        ];
+    }
+
+    protected function props(FormFlowStepData $step, array $context, string $mobile, mixed $challenge): array
+    {
+        return [
             'flow_id' => $context['flow_id'] ?? null,
             'step' => (string) ($context['step_index'] ?? 0),
             'mobile' => $mobile,
@@ -89,7 +115,8 @@ class OtpHandler implements FormHandlerInterface
                 'digits' => 6,
             ], $step->config),
             'ui_variant' => $step->config['ui_variant'] ?? config('form-flow.ui.variant', 'default'),
-        ]);
+            'preview_mode' => (bool) ($context['preview_mode'] ?? false),
+        ];
     }
 
     /**
