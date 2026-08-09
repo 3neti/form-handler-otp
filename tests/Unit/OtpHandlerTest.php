@@ -215,7 +215,20 @@ it('rejects challenge actions for a non-current or non-OTP step', function (): v
 
 it('publishes the supported configuration schema', function (): void {
     expect(app(OtpHandler::class)->getConfigSchema())
-        ->toHaveKeys(['purpose', 'max_resends', 'resend_cooldown', 'digits', 'ui_variant'])
+        ->toHaveKeys([
+            'purpose',
+            'max_resends',
+            'resend_cooldown',
+            'digits',
+            'ui_variant',
+            'action_placement',
+            'ui_layout',
+            'app_name',
+            'app_logo',
+            'package_versions',
+            'show_package_versions',
+        ])
+        ->and(app(OtpHandler::class)->getConfigSchema()['action_placement'])->toContain('inline,bottom,bottom_sticky')
         ->and(app(OtpHandler::class)->validate([], []))->toBeTrue();
 });
 test('published claim screen fails closed in preview mode', function () {

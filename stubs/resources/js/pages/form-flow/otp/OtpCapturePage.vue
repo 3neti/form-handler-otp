@@ -13,12 +13,23 @@ import FormFlowActions from "@/pages/form-flow/core/components/FormFlowActions.v
 import FormFlowScreen from "@/pages/form-flow/core/components/FormFlowScreen.vue";
 import type { FormFlowUiVariant } from "@/pages/form-flow/core/components/formFlowUiVariant";
 
+interface PackageVersion {
+  name: string;
+  version: string;
+}
+
 interface Props {
   flow_id: string;
   step: string;
   mobile: string;
   challenge_status: string;
   ui_variant?: FormFlowUiVariant | string | null;
+  action_placement?: "inline" | "bottom" | "bottom_sticky" | string | null;
+  ui_layout?: Record<string, unknown> | null;
+  app_name?: string | null;
+  app_logo?: string | null;
+  package_versions?: PackageVersion[] | Record<string, string> | null;
+  show_package_versions?: boolean;
   preview_mode?: boolean;
   config: {
     max_resends: number;
@@ -178,6 +189,10 @@ onMounted(() => {
     title="OTP Verification"
     :description="`Enter the ${config.digits}-digit code sent to your mobile`"
     :variant="ui_variant"
+    :app-name="app_name"
+    :app-logo="app_logo"
+    :package-versions="package_versions"
+    :show-package-versions="show_package_versions"
     inner-class="max-w-md"
   >
     <Head title="OTP Verification" />
@@ -269,6 +284,7 @@ onMounted(() => {
         <FormFlowActions
           v-else
           :variant="ui_variant"
+          :action-placement="action_placement"
           :show-secondary="false"
           primary-label="Verify OTP"
           primary-type="button"
