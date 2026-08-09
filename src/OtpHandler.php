@@ -207,7 +207,7 @@ class OtpHandler implements FormHandlerInterface, FormHandlerPreviewInterface
             'resend_cooldown' => 'integer|min:10|max:120',
             'digits' => 'integer|in:4,5,6',
             'ui_variant' => 'nullable|string|in:default,compact,immersive',
-            'action_placement' => 'nullable|string|in:inline,bottom,bottom_sticky',
+            'action_placement' => 'nullable|string|in:inline,bottom,bottom_sticky,viewport_bottom',
             'ui_layout' => 'nullable|array',
             'app_name' => 'nullable|string',
             'app_logo' => 'nullable|string',

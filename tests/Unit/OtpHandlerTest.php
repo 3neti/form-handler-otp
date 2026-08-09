@@ -228,7 +228,7 @@ it('publishes the supported configuration schema', function (): void {
             'package_versions',
             'show_package_versions',
         ])
-        ->and(app(OtpHandler::class)->getConfigSchema()['action_placement'])->toContain('inline,bottom,bottom_sticky')
+        ->and(app(OtpHandler::class)->getConfigSchema()['action_placement'])->toContain('inline,bottom,bottom_sticky,viewport_bottom')
         ->and(app(OtpHandler::class)->validate([], []))->toBeTrue();
 });
 test('published claim screen fails closed in preview mode', function () {

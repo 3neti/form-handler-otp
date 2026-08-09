@@ -24,7 +24,7 @@ interface Props {
   mobile: string;
   challenge_status: string;
   ui_variant?: FormFlowUiVariant | string | null;
-  action_placement?: "inline" | "bottom" | "bottom_sticky" | string | null;
+  action_placement?: "inline" | "bottom" | "bottom_sticky" | "viewport_bottom" | string | null;
   ui_layout?: Record<string, unknown> | null;
   app_name?: string | null;
   app_logo?: string | null;
@@ -193,6 +193,7 @@ onMounted(() => {
     :app-logo="app_logo"
     :package-versions="package_versions"
     :show-package-versions="show_package_versions"
+    version-context="otp"
     inner-class="max-w-md"
   >
     <Head title="OTP Verification" />
@@ -272,15 +273,17 @@ onMounted(() => {
 
       <!-- Submit Button -->
       <div class="grid gap-3">
-        <button
+        <FormFlowActions
           v-if="!codeRequested"
-          type="button"
-          class="inline-flex min-h-11 w-full items-center justify-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-50"
-          :disabled="sendRequest.processing"
-          @click="sendOtp"
-        >
-          {{ sendRequest.processing ? "Requesting…" : "Send Verification Code" }}
-        </button>
+          :variant="ui_variant"
+          :action-placement="action_placement"
+          :show-secondary="false"
+          primary-label="Send Verification Code"
+          primary-type="button"
+          :primary-disabled="sendRequest.processing"
+          :processing="sendRequest.processing"
+          @primary="sendOtp"
+        />
         <FormFlowActions
           v-else
           :variant="ui_variant"
