@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import FormFlowPresentation from "@/pages/form-flow/core/components/FormFlowPresentation.vue";
+import type { FormFlowPresentation as PresentationPolicy } from "@/pages/form-flow/core/components/formFlowPresentation";
 import { Head, router, useHttp } from "@inertiajs/vue3";
 import { computed, onMounted, ref, watch } from "vue";
 import {
@@ -19,6 +21,7 @@ interface PackageVersion {
 }
 
 interface Props {
+  presentation?: PresentationPolicy | null;
   flow_id: string;
   step: string;
   mobile: string;
@@ -185,6 +188,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <FormFlowPresentation :presentation="presentation">
   <FormFlowScreen
     title="OTP Verification"
     :description="`Enter the ${config.digits}-digit code sent to your mobile`"
@@ -304,4 +308,6 @@ onMounted(() => {
       </div>
     </form>
   </FormFlowScreen>
+
+  </FormFlowPresentation>
 </template>
