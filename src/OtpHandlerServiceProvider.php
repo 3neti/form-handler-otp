@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace LBHurtado\FormHandlerOtp;
 
 use Illuminate\Support\ServiceProvider;
+use LBHurtado\FormFlowManager\Services\FormFlowPresentationResolver;
 use LBHurtado\FormHandlerOtp\Console\InstallOtpHandlerCommand;
 use LBHurtado\FormHandlerOtp\Console\TestOtpCommand;
 use LBHurtado\FormHandlerOtp\Contracts\OtpChallengeGateway;
@@ -44,6 +45,8 @@ class OtpHandlerServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
+        app(FormFlowPresentationResolver::class)->registerScreens(['otp']);
+
         $this->loadRoutesFrom(__DIR__.'/../routes/web.php');
 
         // Register console commands

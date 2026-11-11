@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import FormFlowPresentation from "@/pages/form-flow/core/components/FormFlowPresentation.vue";
+import type { FormFlowPresentation as PresentationPolicy } from "@/pages/form-flow/core/components/formFlowPresentation";
 import { Head, router, useHttp } from "@inertiajs/vue3";
 import { computed, onMounted, ref, watch } from "vue";
 import {
@@ -19,12 +21,19 @@ interface PackageVersion {
 }
 
 interface Props {
+  presentation?: PresentationPolicy | null;
   flow_id: string;
   step: string;
   mobile: string;
   challenge_status: string;
   ui_variant?: FormFlowUiVariant | string | null;
-  action_placement?: "inline" | "bottom" | "bottom_sticky" | "viewport_bottom" | string | null;
+  action_placement?:
+    | "inline"
+    | "bottom"
+    | "bottom_sticky"
+    | "viewport_bottom"
+    | string
+    | null;
   ui_layout?: Record<string, unknown> | null;
   app_name?: string | null;
   app_logo?: string | null;
@@ -185,123 +194,133 @@ onMounted(() => {
 </script>
 
 <template>
-  <FormFlowScreen
-    title="OTP Verification"
-    :description="`Enter the ${config.digits}-digit code sent to your mobile`"
-    :variant="ui_variant"
-    :app-name="app_name"
-    :app-logo="app_logo"
-    :package-versions="package_versions"
-    :show-package-versions="show_package_versions"
-    version-context="otp"
-    inner-class="max-w-md"
-  >
-    <Head title="OTP Verification" />
+  <FormFlowPresentation :presentation="presentation" screen="otp">
+    <FormFlowScreen
+      title="OTP Verification"
+      :description="`Enter the ${config.digits}-digit code sent to your mobile`"
+      :variant="ui_variant"
+      :app-name="app_name"
+      :app-logo="app_logo"
+      :package-versions="package_versions"
+      :show-package-versions="show_package_versions"
+      version-context="otp"
+      inner-class="max-w-md"
+    >
+      <Head title="OTP Verification" />
 
-    <form @submit.prevent="submit" class="space-y-6">
-      <!-- Mobile (Read-only) -->
-      <div class="flex flex-col gap-1">
-        <Label for="mobile">Mobile Number</Label>
-        <input
-          id="mobile"
-          type="text"
-          :value="mobile"
-          readonly
-          tabindex="-1"
-          class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 px-3 py-2 text-gray-700 shadow-sm dark:bg-gray-700 dark:text-gray-300"
-        />
-      </div>
+      <form @submit.prevent="submit" class="space-y-6">
+        <!-- Mobile (Read-only) -->
+        <div class="flex flex-col gap-1">
+          <Label for="mobile">Mobile Number</Label>
+          <input
+            id="mobile"
+            type="text"
+            :value="mobile"
+            readonly
+            tabindex="-1"
+            class="mt-1 block w-full rounded-md border-gray-300 bg-gray-100 px-3 py-2 text-gray-700 shadow-sm dark:bg-gray-700 dark:text-gray-300"
+          />
+        </div>
 
-      <!-- OTP Input -->
-      <div class="flex flex-col gap-1">
-        <Label for="otp">One-Time Password</Label>
-        <Input
-          id="otp"
-          :model-value="otpCode"
-          type="text"
-          :maxlength="config.digits"
-          inputmode="numeric"
-          pattern="[0-9]*"
-          autocomplete="one-time-code"
-          placeholder="Enter OTP"
-          :disabled="!codeRequested"
-          required
-          @update:model-value="updateOtp"
-        />
+        <!-- OTP Input -->
+        <div class="flex flex-col gap-1">
+          <Label for="otp">One-Time Password</Label>
+          <Input
+            id="otp"
+            :model-value="otpCode"
+            type="text"
+            :maxlength="config.digits"
+            inputmode="numeric"
+            pattern="[0-9]*"
+            autocomplete="one-time-code"
+            placeholder="Enter OTP"
+            :disabled="!codeRequested"
+            required
+            @update:model-value="updateOtp"
+          />
 
-        <div class="flex items-center justify-between text-sm min-h-[1.25rem]">
-          <!-- Error message on the left -->
-          <div class="text-red-600">
-            <InputError :message="errors.otp_code" />
-          </div>
-
-          <!-- Show "OTP sent" initially; hide after first error -->
-          <div v-if="!codeRequested" class="text-gray-500 dark:text-gray-400">
-            Send a code to continue.
-          </div>
-
-          <!-- Show Resend OTP only after error -->
           <div
-            v-else-if="resendCount < MAX_RESENDS"
-            class="text-blue-600 hover:underline cursor-pointer text-right dark:text-blue-400"
-            @click="resendOtp"
-            :class="{
-              'opacity-50 pointer-events-none': isSending || cooldown > 0,
-            }"
+            class="flex items-center justify-between text-sm min-h-[1.25rem]"
           >
-            <template v-if="cooldown > 0"> Resend in {{ cooldown }}s </template>
-            <template v-else> Resend OTP </template>
+            <!-- Error message on the left -->
+            <div class="text-red-600">
+              <InputError :message="errors.otp_code" />
+            </div>
+
+            <!-- Show "OTP sent" initially; hide after first error -->
+            <div v-if="!codeRequested" class="text-gray-500 dark:text-gray-400">
+              Send a code to continue.
+            </div>
+
+            <!-- Show Resend OTP only after error -->
+            <div
+              v-else-if="resendCount < MAX_RESENDS"
+              class="text-blue-600 hover:underline cursor-pointer text-right dark:text-blue-400"
+              @click="resendOtp"
+              :class="{
+                'opacity-50 pointer-events-none': isSending || cooldown > 0,
+              }"
+            >
+              <template v-if="cooldown > 0">
+                Resend in {{ cooldown }}s
+              </template>
+              <template v-else> Resend OTP </template>
+            </div>
+          </div>
+
+          <!-- Resend confirmation message -->
+          <div
+            v-if="resendMessage"
+            class="mt-1 text-sm text-gray-500 text-right dark:text-gray-400"
+          >
+            {{ resendMessage }}
+          </div>
+
+          <!-- Max resend reached -->
+          <div
+            v-if="resendCount >= MAX_RESENDS"
+            class="mt-1 text-sm text-red-500"
+          >
+            You have reached the maximum number of resends.
           </div>
         </div>
 
-        <!-- Resend confirmation message -->
-        <div
-          v-if="resendMessage"
-          class="mt-1 text-sm text-gray-500 text-right dark:text-gray-400"
-        >
-          {{ resendMessage }}
+        <!-- Submit Button -->
+        <div class="grid gap-3">
+          <FormFlowActions
+            primary-role="send_code"
+            secondary-role="cancel"
+            v-if="!codeRequested"
+            :variant="ui_variant"
+            :action-placement="action_placement"
+            :show-secondary="false"
+            primary-label="Send Verification Code"
+            primary-type="button"
+            :primary-disabled="sendRequest.processing"
+            :processing="sendRequest.processing"
+            @primary="sendOtp"
+          />
+          <FormFlowActions
+            primary-role="verify"
+            secondary-role="cancel"
+            v-else
+            :variant="ui_variant"
+            :action-placement="action_placement"
+            :show-secondary="false"
+            primary-label="Verify OTP"
+            primary-type="button"
+            :primary-disabled="!canSubmit"
+            :processing="processing"
+            @primary="submit"
+          />
+          <p
+            v-if="errors.otp_code || errors['data.otp_code']"
+            class="text-sm text-destructive"
+          >
+            {{ errors.otp_code || errors["data.otp_code"] }}
+          </p>
         </div>
-
-        <!-- Max resend reached -->
-        <div
-          v-if="resendCount >= MAX_RESENDS"
-          class="mt-1 text-sm text-red-500"
-        >
-          You have reached the maximum number of resends.
-        </div>
-      </div>
-
-      <!-- Submit Button -->
-      <div class="grid gap-3">
-        <FormFlowActions
-          v-if="!codeRequested"
-          :variant="ui_variant"
-          :action-placement="action_placement"
-          :show-secondary="false"
-          primary-label="Send Verification Code"
-          primary-type="button"
-          :primary-disabled="sendRequest.processing"
-          :processing="sendRequest.processing"
-          @primary="sendOtp"
-        />
-        <FormFlowActions
-          v-else
-          :variant="ui_variant"
-          :action-placement="action_placement"
-          :show-secondary="false"
-          primary-label="Verify OTP"
-          primary-type="button"
-          :primary-disabled="!canSubmit"
-          :processing="processing"
-          @primary="submit"
-        />
-        <p
-          v-if="errors.otp_code || errors['data.otp_code']"
-          class="text-sm text-destructive"
-        >
-          {{ errors.otp_code || errors["data.otp_code"] }}
-        </p>
-      </div>
-    </form>
-  </FormFlowScreen>
+      </form>
+    </FormFlowScreen>
+  </FormFlowPresentation>
 </template>
