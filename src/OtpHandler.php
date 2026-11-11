@@ -63,13 +63,13 @@ class OtpHandler implements FormHandlerInterface, FormHandlerPreviewInterface
         Session::forget("otp_challenge.{$referenceId}");
         Session::forget("otp_delivery.{$referenceId}");
 
-        return new OtpData(
+        return (new OtpData(
             mobile: $mobile,
             verified_at: $result->proof->verified_at,
             reference_id: $referenceId,
             verification_reference: $result->proof->reference,
             verification_purpose: $result->proof->purpose,
-        )->toArray();
+        ))->toArray();
     }
 
     public function validate(array $data, array $rules): bool
