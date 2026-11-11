@@ -40,8 +40,8 @@ interface Props {
 
 const props = defineProps<Props>();
 
-const sendRequest = useHttp({});
-const resendRequest = useHttp({});
+const sendRequest = useHttp<{}, { status?: string }>({});
+const resendRequest = useHttp<{}, { status?: string }>({});
 
 const otpCode = ref("");
 const processing = ref(false);
@@ -114,7 +114,7 @@ async function sendOtp() {
     sendOtpChallenge.url({ flowId: props.flow_id, step: props.step }),
   );
 
-  challengeStatus.value = String(response.data?.status ?? "requested");
+  challengeStatus.value = String(response.status ?? "requested");
   resendMessage.value = "Verification code requested.";
   startCooldown();
   otpInputRef.value?.focus();
@@ -133,7 +133,7 @@ async function resendOtp() {
     const response = await resendRequest.post(
       resendOtpChallenge.url({ flowId: props.flow_id, step: props.step }),
     );
-    challengeStatus.value = String(response.data?.status ?? "requested");
+    challengeStatus.value = String(response.status ?? "requested");
     resendCount.value++;
     resendMessage.value = "Verification code requested again.";
     startCooldown();
